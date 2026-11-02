@@ -1,0 +1,20 @@
+scenario                  status  refund_inr  llm_calls  tokens_used  expected  match
+      S1                  REFUND      128.25          5         1047    REFUND   True
+      S2                  REFUND      135.00          5         1047    REFUND   True
+      S3                ESCALATE     1999.00          5         1034  ESCALATE   True
+      S4                  DENIED        0.00          4          725    DENIED   True
+      S5                  DENIED        0.00          3          427    DENIED   True
+      S6               NOT_FOUND        0.00          2          132 NOT_FOUND   True
+      S7 FALLBACK_MAX_ITERATIONS        0.00          6         3180  FALLBACK   True
+
+S1 with token_limit=200 -> FALLBACK_TOKEN_LIMIT after 3 model calls, 444 tokens
+  final_answer: HANDOFF to human agent: token limit of 200 exceeded (444 used). Scenario S1, 2 steps completed (tools run: get_order, search_policy); no automatic decision was made, please review the request.
+S1 with time_limit_seconds=0 -> FALLBACK_TIMEOUT after 0 model calls
+  final_answer: HANDOFF to human agent: time limit of 0 s reached. Scenario S1, 0 steps completed (tools run: none); no automatic decision was made, please review the request.
+
+crash: simulated crash after tool #2 (search_policy)
+tools executed before the crash: ['get_order', 'search_policy']
+tools executed across crash and resume: ['get_order', 'search_policy', 'calculate_refund', 'issue_refund']
+resumed run final: REFUND 128.25 | model calls 5 | tokens 1047
+
+ledger lines: 4 | agent_runs lines: 10 | state files: 10
