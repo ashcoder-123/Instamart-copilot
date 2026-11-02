@@ -1,0 +1,71 @@
+====================================================================== 
+AUDIT OF RAW DATA
+======================================================================
+
+--- customers.csv  shape=(1200, 5)
+               dtype  missing  missing_pct
+customer_id      str        0         0.00
+city             str        0         0.00
+signup_date      str        0         0.00
+age          float64       61         5.08
+gender           str       30         2.50
+
+--- products.csv  shape=(40, 4)
+              dtype  missing  missing_pct
+product_id      str        0          0.0
+product_name    str        0          0.0
+category        str        0          0.0
+price_inr     int64        0          0.0
+
+--- orders.csv  shape=(13084, 9)
+                    dtype  missing  missing_pct
+order_id              str        0         0.00
+customer_id           str        0         0.00
+product_id            str        0         0.00
+quantity            int64        0         0.00
+order_ts              str        0         0.00
+status                str        0         0.00
+discount_pct        int64        0         0.00
+order_amount          str       53         0.41
+delivery_minutes  float64     2541        19.42
+
+--- Audit figures
+raw orders.csv rows                            13,084
+exact duplicate rows                              119
+rows with status pending                          656
+distinct order_id                              12,309
+non-numeric order_amount                          120
+negative delivery_minutes                         106
+blank delivery_minutes                          2,541
+blank age                                          61
+age outside 10-100                                  6
+distinct raw city spellings                        24
+distinct non-blank raw gender spellings            10
+blank gender                                       30
+
+====================================================================== 
+CLEANING CUSTOMERS
+======================================================================
+(a) city values changed by strip+title: 476; distinct now: 6
+(c) impossible ages set to missing: 6; missing ages before fill: 67
+cities: {'Pune': 227, 'Delhi': 210, 'Bengaluru': 197, 'Chennai': 191, 'Hyderabad': 191, 'Mumbai': 184}
+genders: {'female': 610, 'male': 560, 'unknown': 30}
+missing ages: 0 | age range: 18.0 - 60.0
+
+====================================================================== 
+CLEANING ORDERS
+======================================================================
+rule 1: order_ts converted to datetime (13,084 rows)
+rule 2: exact duplicate rows removed: 119 (rows now 12,965)
+rule 3: older records of repeated order_id removed (keep latest order_ts): 656 (rows now 12,309)
+rule 4: unparseable order_amount values refilled from product price: 112
+rule 5: negative delivery_minutes set to missing: 105
+        completed orders with missing delivery filled by category median: 774
+        cancelled orders left missing on purpose: 1199
+
+rows: 12309 | status counts: {'completed': 11110, 'cancelled': 1199}
+missing order_amount: 0
+missing delivery (completed): 0 | missing delivery (cancelled): 1199
+completed revenue: INR 2,998,668.80
+
+stored: data/clean/*.csv and data/instamart.db (tables customers, products, orders)
