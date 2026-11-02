@@ -4,7 +4,7 @@
 
 A capstone project that builds an internal Customer Intelligence & Support Copilot on fully synthetic data (nothing here is real Instamart data). The repository is built in four connected Parts: A turns messy order exports into a trusted SQLite database, B segments customers and predicts lapse, C triages support tickets with guardrails, D answers policy questions and runs a refund agent. All amounts are in INR. All model calls use the offline `mock_llm.py`; no key or network is needed.
 
-Status: **Part A complete.** Parts B, C and D are filled in as they are built.
+Status: **Parts A and B complete.** Parts C and D are filled in as they are built.
 
 ## Reproduce
 
@@ -17,9 +17,11 @@ python src/part_a_clean.py           # audit, cleaning, data/clean/*.csv and dat
 python src/validate.py               # must print ALL CHECKPOINTS PASSED
 python src/run_sql.py                # runs the seven queries in sql/queries.sql
 python src/pandas_analysis.py        # pandas cross-check and exploratory statistics
+python src/part_b_segments.py        # RFM, K-means, PCA -> outputs/customer_segments.csv
+python src/part_b_lapse.py           # lapse model -> outputs/lapse_model.joblib, outputs/retention_list.csv
 ```
 
-(Commands for Parts B, C and D are appended here as those Parts are added.)
+(Commands for Parts C and D are appended here as those Parts are added.)
 
 ## Part A
 
@@ -117,7 +119,95 @@ Correlation matrix (completed orders):
 
 ## Part B
 
-*To be added.*
+Scripts: `src/part_b_segments.py` (tasks 1 to 3) and `src/part_b_lapse.py` (tasks 4 to 8). Only completed orders are used for customer behaviour.
+
+### RFM table
+
+Snapshot 2025-10-01 00:00:00. Recency is `(snapshot - last_completed_order_ts).dt.days`, frequency the number of distinct completed orders, monetary the sum of completed order_amount.
+
+| measure | result | reference |
+|---|---|---|
+| customers | 1,175 | 1,175 |
+| recency median / min / max | 19 / 0 / 180 | 19 / 0 / 180 |
+| frequency mean / max | 9.46 / 33 | 9.46 / 33 |
+| monetary mean / max (INR) | 2,552.06 / 14,766.55 | 2,552.06 / 14,766.55 |
+
+### K-means (StandardScaler, `n_init=10`, `random_state=42`)
+
+| K | inertia | silhouette |
+|---|---|---|
+| 2 | 1820.8 | 0.465 |
+| 3 | 1268.2 | 0.445 |
+| 4 | 743.1 | 0.526 |
+| 5 | 617.4 | 0.480 |
+| 6 | 503.2 | 0.482 |
+| 7 | 408.5 | 0.416 |
+| 8 | 366.5 | 0.412 |
+
+**Chosen K = 4.** Inertia falls steeply from K=2 to K=4 (1820.8 to 743.1) and much more slowly afterwards, so the elbow is at 4; the silhouette is also highest at K=4 (0.526); and four segments are few enough for the business to run a distinct campaign for each. The inertia of K=8 is always lower than that of K=2 because every extra centroid can only bring points closer to their nearest centre (with one centroid per customer the inertia would be zero), so a lower inertia alone cannot pick K; the elbow, the silhouette and interpretability have to decide.
+
+### Segment profile (K = 4)
+
+Cluster numbers are only labels with no ordering; names below are derived from each segment's means, not from its number.
+
+| segment_id | name | size | mean recency (days) | mean frequency | mean monetary (INR) | premium | recommended action |
+|---|---|---|---|---|---|---|---|
+| 0 | Occasional Shoppers | 436 | 28.86 | 3.77 | 1,057.62 | no | bundle offers and category nudges to raise frequency |
+| 1 | Premium Big Spenders | 138 | 24.12 | 6.77 | 7,129.70 | **yes** | VIP perks, early access to electronics launches, priority support |
+| 2 | Loyal Regulars | 419 | 8.77 | 19.40 | 3,410.02 | no | protect the habit with free-delivery thresholds and referral rewards |
+| 3 | At-Risk Fading | 182 | 109.04 | 2.20 | 685.99 | no | win-back coupon and reminder before they lapse |
+
+Premium is the segment with the highest mean monetary value. PCA with two components on the scaled RFM matrix gives `explained_variance_ratio_` of 0.634 and 0.218, total 0.852. `outputs/customer_segments.csv` has columns customer_id, recency, frequency, monetary, segment_id, segment_name, is_premium (1,175 rows, 138 premium).
+
+### Lapse problem
+
+Cutoff 2025-09-01. The cohort is every customer with at least one completed order before the cutoff; `lapsed = 1` if the customer has no completed order from 2025-09-01 to 2025-09-30. Features use only orders dated before the cutoff plus the clean customer table: recency (days from cutoff to last completed order), frequency, monetary, average discount_pct of completed orders, cancellation rate (cancelled / all orders with a final status), average delivery_minutes of completed orders, favourite product category, city, age, gender and tenure in days. The segment labels from the clustering were **not** used as features.
+
+| item | result | reference |
+|---|---|---|
+| cohort | 1,156 customers | 1,156 |
+| lapsed | 443 (38.32%) | 443 (38.32%) |
+| split (`test_size=0.2`, stratified, `random_state=42`) | 924 train / 232 test | 924 / 232 |
+| baseline "never lapsed": test accuracy / lapsed F1 | 61.6% / 0.000 | 61.6% / 0 |
+
+### Preprocessing without leakage
+
+City, gender and favourite category are one-hot encoded with `drop="first"` and numeric features are standardised, both inside a scikit-learn `Pipeline` so they are fitted on the 924 training rows only. The learned mean of frequency in the scaler is 8.1147 versus 8.0285 over the full cohort: they differ because the scaler saw only the training rows and never the test rows. The feature matrix has 0 missing values (asserted in code). **No encoder, scaler or resampler saw test rows, no data from 2025-09-01 onwards entered the features, and the segment labels were not used as features.**
+
+### Tuning and test evaluation (lapsed = positive class)
+
+| model | grid | best parameters | best CV F1 |
+|---|---|---|---|
+| LogisticRegression(max_iter=1000) | C in {0.01, 0.1, 1, 10, 100}, cv=5 | C = 100 | 0.651 |
+| RandomForest(n_estimators=100, random_state=42) | max_depth {3,5,8} x min_samples_leaf {5,10,20}, cv=5 | depth 8, leaf 10 | 0.681 |
+
+| test set | confusion [[TN, FP],[FN, TP]] | precision | recall | F1 |
+|---|---|---|---|---|
+| Logistic regression | [[111, 32],[31, 58]] | 0.644 | 0.652 | 0.648 |
+| Random forest | [[113, 30],[31, 58]] | 0.659 | 0.652 | 0.655 |
+
+The reference best C was 1; ours is 100, the edge of the grid, because our feature set differs slightly; the test F1 values are of the stated order and above the 0.55 requirement. **Selected model: random forest**, chosen on cross-validated F1 (0.681 against 0.651), not on the test set, with a test F1 of 0.655. Missing a customer who is about to lapse loses all of their future revenue, while wrongly targeting a loyal customer costs only a coupon or a message, so recall matters at least as much as precision; the forest has the higher precision and F1 at equal recall (0.652), so it wastes fewer offers for the same number of lapsing customers caught. If the retention team cares only about catching lapsers, the balanced logistic regression below is the alternative.
+
+### Class-balance experiment
+
+Training set over-sampled with randomly drawn duplicates of lapsed rows (`resample`, with replacement, `random_state=42`) to 570 and 570 rows; the best logistic regression is refitted on it and tested on the original, unchanged test set.
+
+| model | precision | recall | F1 | confusion |
+|---|---|---|---|---|
+| logistic regression, un-balanced | 0.644 | 0.652 | 0.648 | [[111, 32],[31, 58]] |
+| logistic regression, balanced | 0.589 | 0.854 | 0.697 | [[90, 53],[13, 76]] |
+
+Recall moved most (0.652 to 0.854) while precision did not rise (it fell from 0.644 to 0.589). For the retention team this means over-sampling catches many more lapsing customers (76 instead of 58 of 89) at the price of 21 more wrongly targeted loyal customers.
+
+### Interpretation, persistence and retention list
+
+Top five random-forest features: frequency (0.280), monetary (0.271), recency (0.115), average delivery minutes (0.061) and cancellation rate (0.052). Business reading: how often and how much a customer buys is by far the best signal of whether they stay, recency adds a smaller signal, and delivery experience and cancellations matter only a little.
+
+Signs of the logistic-regression coefficients (standardised features): frequency **negative** (-1.70), more orders means less likely to lapse; recency **positive** (+0.04), a longer gap since the last order means more likely to lapse, although the effect is small once frequency is in the model; cancellation rate **negative** (-0.12), counter-intuitive and small, probably noise or overlap with frequency, so it should not be read as "cancelling keeps customers".
+
+The selected model is saved with `joblib.dump` to `outputs/lapse_model.joblib`; the reloaded model reproduces the original test predictions and probabilities exactly (checked in code).
+
+`outputs/retention_list.csv` holds, for the 40 test-set customers in the Premium segment, the 10 with the highest predicted lapse probability (columns customer_id, lapse_probability, actually_lapsed). Only **1 of those 10** truly lapsed. The Premium flag comes from whole-window RFM that includes September, the month that defines the lapse label, so it is a post-hoc whole-window label: this retention list is illustrative and not a leakage-free evaluation (the model's own features still use only pre-cutoff orders).
 
 ## Part C
 
@@ -129,4 +219,7 @@ Correlation matrix (completed orders):
 
 ## Limitations and Next Steps
 
-*To be completed after Parts B to D. Part A note: the raw exports are synthetic, and median imputation of delivery time and age is a simple rule that hides real variation.*
+*To be completed after Part D.*
+
+- Part A: the raw exports are synthetic, and median imputation of delivery time and age is a simple rule that hides real variation.
+- Part B: the Premium flag is a post-hoc whole-window label (its RFM includes September, which defines the lapse label), so `outputs/retention_list.csv` is illustrative and not a leakage-free evaluation. The test set has only 232 customers, so test F1 differences of a few hundredths between models are within noise. Over-sampling by duplication raises recall at the cost of precision and was not tuned further.

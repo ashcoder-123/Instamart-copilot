@@ -1,0 +1,26 @@
+RFM customers: 1175
+recency  median 19  min 0  max 180
+frequency mean 9.46  max 33
+monetary  mean 2552.06  max 14766.55
+
+K-means table
+ K  inertia  silhouette
+ 2   1820.8       0.465
+ 3   1268.2       0.445
+ 4    743.1       0.526
+ 5    617.4       0.480
+ 6    503.2       0.482
+ 7    408.5       0.416
+ 8    366.5       0.412
+
+Segment profile (cluster numbers are only labels with no ordering)
+            size  mean_recency  mean_frequency  mean_monetary          segment_name                                                                    action  is_premium
+segment_id                                                                                                                                                               
+0            436         28.86            3.77        1057.62   Occasional Shoppers                Bundle offers and category nudges to raise order frequency       False
+1            138         24.12            6.77        7129.70  Premium Big Spenders         VIP perks, early access to electronics launches, priority support        True
+2            419          8.77           19.40        3410.02        Loyal Regulars  Protect the habit: free-delivery thresholds, referral and streak rewards       False
+3            182        109.04            2.20         685.99        At-Risk Fading                            Win-back coupon and reminder before they lapse       False
+
+PCA explained_variance_ratio_: 0.634, 0.218, total 0.852
+
+wrote outputs/customer_segments.csv: 1175 rows | premium customers: 138
